@@ -9,7 +9,7 @@ description = "Lossless multi-range video extraction with ffmpeg stream copy, wi
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-authors = [{ name = "Joe Petrucelli", email = "joepetjr@gmail.com" }]
+authors = [{ name = "Joe Petrucelli", email = "backroadcreativeco@gmail.com" }]
 keywords = ["ffmpeg", "video", "stream-copy", "keyframe", "gop", "concat", "lossless", "trim"]
 classifiers = [
     "Development Status :: 4 - Beta",
