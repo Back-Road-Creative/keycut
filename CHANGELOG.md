@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- Windows installer, built and attached to a `v*` tag's GitHub release by
+  `.github/workflows/release.yml`: a PyInstaller one-file executable wrapped in
+  an Inno Setup installer (`installer/`) that installs into Program Files, adds
+  itself to `PATH`, and registers an uninstaller. It does not bundle ffmpeg and
+  it is not code-signed; both are stated in the installer and the README.
+
 ## 0.1.0
 
 First release.

@@ -196,6 +196,39 @@ Python 3.11, 3.12 and 3.13. The oldest requirement is a build that accepts
 ffmpeg -ss 1 -to 2 -i any.mp4 -c copy -f null - && echo ok
 ```
 
+### Windows installer
+
+Each release also carries `keycut-setup-<version>.exe` on its
+[releases page](https://github.com/Back-Road-Creative/keycut/releases) — keycut
+frozen into one executable, so it needs no Python. It installs into Program
+Files, appends that directory to the system `PATH`, and registers an
+uninstaller in Add/Remove Programs. Open a *new* terminal afterwards; one that
+was already open still holds the old `PATH`.
+
+Two things to know before downloading it.
+
+**ffmpeg is not bundled, and keycut cannot do anything without it.** The
+installer contains keycut and nothing else. An ffmpeg build dwarfs it, and
+which licence a given build falls under depends on how it was configured, so
+shipping one inside this installer would be both large and a claim this project
+is not in a position to make. Install it yourself — this puts `ffmpeg` and
+`ffprobe` on `PATH`:
+
+```powershell
+winget install -e --id Gyan.FFmpeg
+```
+
+`choco install ffmpeg` works too. Confirm with `ffmpeg -version`.
+
+**The build is not code-signed.** There is no code-signing certificate for this
+project, so Windows cannot show you a publisher. Expect the blue *"Windows
+protected your PC"* box — "Microsoft Defender SmartScreen prevented an
+unrecognized app from starting" — which runs the installer only after **More
+info** → **Run anyway**, and expect your browser to warn during the download.
+That is simply what an unsigned binary looks like; it is not evidence the file
+is safe. If you would rather not make that call, `pip install keycut` needs no
+installer.
+
 ## Command line
 
 ```bash
