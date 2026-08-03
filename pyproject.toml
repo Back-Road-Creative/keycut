@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "keycut"
-version = "0.1.0"
+version = "0.1.1"
 description = "Lossless multi-range video extraction with ffmpeg stream copy, without the GOP-replay artefact."
 readme = "README.md"
 requires-python = ">=3.11"
