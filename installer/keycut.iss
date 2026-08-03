@@ -50,9 +50,10 @@ Source: "..\dist\keycut.exe"; DestDir: "{app}"; Flags: ignoreversion
 [Registry]
 ; Append the install directory to the machine PATH. The Check skips the append
 ; when it is already present, so reinstalling does not grow PATH without bound.
-Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; \
-    ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; \
-    Check: NeedsAddPath
+; Deliberately one long line: the `\` continuation is an ISPP line-spanning
+; feature that nothing in this repo can compile-test, and a wrapped line that
+; silently mis-parses would corrupt the machine PATH. One line cannot.
+Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: NeedsAddPath
 
 [Messages]
 ; Which of the two the wizard shows depends on whether it created any icons,
@@ -88,9 +89,10 @@ begin
   P := Pos(';' + UpperCase(Dir) + ';', ';' + UpperCase(Path) + ';');
   if P = 0 then
     exit;
-  { P indexes the padded copy, where index i is index i-1 of the real string.
-    So the ';' introducing the entry sits at P-1, unless the entry is first:
-    which has no leading ';' and drops the trailing one instead. }
+  { P indexes the padded copy, so real-string index i sits at P = i+1, and the
+    ';' introducing the entry is at P-1. The exception is a first entry, which
+    has no leading ';', so there the trailing one is removed instead. Either way
+    exactly one separator goes with the directory. }
   if P = 1 then
     Delete(Path, 1, Length(Dir) + 1)
   else
