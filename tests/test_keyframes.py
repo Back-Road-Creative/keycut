@@ -8,6 +8,7 @@ import pytest
 
 from keycut import (
     DEFAULT_GOP_DURATION_SEC,
+    FAILED_PROBE_RETRY_SEC,
     clear_keyframe_cache,
     estimate_gop_duration,
     keyframe_at_or_before,
@@ -145,3 +146,92 @@ class TestProbeKeyframes:
             probe_keyframes(master, use_cache=False)
             probe_keyframes(master, use_cache=False)
         assert len(calls) == 2
+
+
+class TestFailedProbeRecovery:
+    """A failed probe is remembered only briefly, so a transient failure
+    (ffprobe momentarily unavailable, file still being written) can recover
+    without a process restart, while a persistent failure is not re-run on
+    every call."""
+
+    def _master(self, tmp_path):
+        master = tmp_path / "m.mp4"
+        master.write_bytes(b"x")
+        return master
+
+    def test_failure_then_success_recovers_after_the_retry_window(self, tmp_path):
+        master = self._master(tmp_path)
+        clock = [1000.0]
+        results = [
+            MagicMock(returncode=1, stdout=b"", stderr=b"transient"),
+            MagicMock(returncode=0, stdout=b"0.0,K__\n2.0,K__\n", stderr=b""),
+        ]
+        calls = []
+
+        def _fake_run(cmd, *a, **kw):
+            calls.append(1)
+            return results[len(calls) - 1]
+
+        with (
+            patch("keycut.keyframes.subprocess.run", side_effect=_fake_run),
+            patch("keycut.keyframes.time.monotonic", side_effect=lambda: clock[0]),
+        ):
+            assert probe_keyframes(master) is None
+            clock[0] += FAILED_PROBE_RETRY_SEC + 1
+            assert probe_keyframes(master) == [0.0, 2.0]
+            assert probe_keyframes(master) == [0.0, 2.0]
+        assert len(calls) == 2, "the recovered result is cached like any success"
+
+    def test_repeated_failures_inside_the_window_do_not_reprobe(self, tmp_path):
+        master = self._master(tmp_path)
+        clock = [1000.0]
+        calls = []
+
+        def _fake_run(cmd, *a, **kw):
+            calls.append(1)
+            return MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+
+        with (
+            patch("keycut.keyframes.subprocess.run", side_effect=_fake_run),
+            patch("keycut.keyframes.time.monotonic", side_effect=lambda: clock[0]),
+        ):
+            for _ in range(5):
+                assert probe_keyframes(master) is None
+                clock[0] += FAILED_PROBE_RETRY_SEC / 10
+        assert len(calls) == 1
+
+    def test_persistent_failure_reprobes_at_most_once_per_window(self, tmp_path):
+        master = self._master(tmp_path)
+        clock = [1000.0]
+        calls = []
+
+        def _fake_run(cmd, *a, **kw):
+            calls.append(1)
+            return MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+
+        with (
+            patch("keycut.keyframes.subprocess.run", side_effect=_fake_run),
+            patch("keycut.keyframes.time.monotonic", side_effect=lambda: clock[0]),
+        ):
+            assert probe_keyframes(master) is None
+            clock[0] += FAILED_PROBE_RETRY_SEC + 1
+            assert probe_keyframes(master) is None
+            assert probe_keyframes(master) is None
+        assert len(calls) == 2
+
+    def test_changed_file_is_reprobed_inside_the_failure_window(self, tmp_path):
+        master = self._master(tmp_path)
+        calls = []
+
+        def _fake_run(cmd, *a, **kw):
+            calls.append(1)
+            return MagicMock(returncode=1, stdout=b"", stderr=b"boom")
+
+        with (
+            patch("keycut.keyframes.subprocess.run", side_effect=_fake_run),
+            patch("keycut.keyframes.time.monotonic", return_value=1000.0),
+        ):
+            assert probe_keyframes(master) is None
+            master.write_bytes(b"longer content")
+            assert probe_keyframes(master) is None
+        assert len(calls) == 2, "file identity still invalidates a cached failure"

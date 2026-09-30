@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- `probe_keyframes` no longer caches a failed probe forever: `None` is now
+  remembered for `FAILED_PROBE_RETRY_SEC` (30 s), so a transient ffprobe
+  failure on unchanged media recovers, and repeated failures are re-probed at
+  most once per window. Successful probes are still cached, and a changed file
+  is still re-probed immediately.
+
 ## 0.1.1 - 2026-08-03
 
 ### Added
