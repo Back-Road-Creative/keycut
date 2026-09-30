@@ -280,6 +280,12 @@ This only holds when the master is a *lossless* concatenation of exactly those
 clips in that order. If anything was re-encoded or inserted between them,
 measure the real offsets instead.
 
+Each duration must be a finite number of seconds `>= 0`. A negative, `NaN`,
+infinite or non-numeric duration raises `ValueError` (naming its index) before
+any range is built, so it never reaches FFmpeg. A `0` or `None` duration (an
+unprobed part) gives an empty range that keeps its slot so later indices stay
+aligned, and an empty list gives no boundaries.
+
 If your segment indices are global to a larger catalogue rather than local to
 this one master, run them through `remap_segment_indices` first. That mismatch
 is worth guarding: it either raises and drops the whole output, or — when the
