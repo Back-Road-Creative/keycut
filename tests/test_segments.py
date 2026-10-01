@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from keycut import (
@@ -35,6 +37,37 @@ class TestBoundariesFromDurations:
 
     def test_none_duration_is_treated_as_zero(self):
         assert boundaries_from_durations([10.0, None]) == [(0.0, 10.0), (10.0, 10.0)]
+
+
+class TestDurationValidation:
+    """A negative or non-finite duration would build ranges that go backwards or
+    poison every later offset with NaN, and only fail later inside FFmpeg."""
+
+    def test_negative_duration_is_rejected(self):
+        with pytest.raises(ValueError, match="index 1"):
+            boundaries_from_durations([10.0, -5.0, 3.0])
+
+    @pytest.mark.parametrize("bad", [math.nan, math.inf, -math.inf])
+    def test_non_finite_duration_is_rejected(self, bad):
+        with pytest.raises(ValueError, match="index 0"):
+            boundaries_from_durations([bad, 3.0])
+
+    def test_non_numeric_duration_is_rejected(self):
+        with pytest.raises(ValueError, match="index 1"):
+            boundaries_from_durations([1.0, "abc"])
+
+    def test_generator_input_is_validated_too(self):
+        with pytest.raises(ValueError):
+            boundaries_from_durations(d for d in [1.0, -1.0])
+
+    def test_supported_input_gives_monotonic_ranges(self):
+        ranges = boundaries_from_durations([10.0, 0.0, 2.5, 7.0])
+        starts = [s for s, _ in ranges]
+        ends = [e for _, e in ranges]
+        assert starts == sorted(starts)
+        assert ends == sorted(ends)
+        assert all(s <= e for s, e in ranges)
+        assert all(ranges[i][1] == ranges[i + 1][0] for i in range(len(ranges) - 1))
 
 
 class TestSegmentToMasterRange:

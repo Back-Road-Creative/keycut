@@ -11,6 +11,7 @@ If you already have master-local ranges, skip this module entirely and call
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Sequence
 from typing import NamedTuple
 
@@ -40,13 +41,32 @@ def boundaries_from_durations(durations: Iterable[float]) -> list[Range]:
     anything inserted between parts, breaks this assumption — measure the real
     offsets instead.
 
+    Contract: every duration must be a finite number of seconds ``>= 0``, so the
+    returned ranges are monotonic (each ``start <= end``, each ``start`` equal to
+    the previous ``end``). A ``None`` duration (an unprobed part) and a ``0``
+    duration both yield an empty ``(t, t)`` range that keeps the part's slot, so
+    later indices stay aligned. An empty ``durations`` gives ``[]``. Raises
+    ``ValueError`` naming the offending index for a negative, ``NaN``, infinite
+    or non-numeric duration, before any range is built and before FFmpeg is
+    reached.
+
     >>> boundaries_from_durations([1200.0, 900.0, 600.0])
     [(0.0, 1200.0), (1200.0, 2100.0), (2100.0, 2700.0)]
     """
     boundaries: list[Range] = []
     cursor = 0.0
-    for d in durations:
-        duration = float(d or 0.0)
+    for index, d in enumerate(durations):
+        try:
+            duration = 0.0 if d is None else float(d)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"duration at index {index} is not a number: {d!r}"
+            ) from None
+        if not math.isfinite(duration) or duration < 0.0:
+            raise ValueError(
+                f"duration at index {index} must be a finite number >= 0, "
+                f"got {d!r}"
+            )
         boundaries.append((cursor, cursor + duration))
         cursor += duration
     return boundaries
