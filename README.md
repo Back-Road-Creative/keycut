@@ -310,7 +310,9 @@ nothing.
   video and audio.
 - **Probing costs a full packet scan.** Roughly a second per hour of footage on
   a local disk. Results are cached per (path, mtime, size) for the life of the
-  process; pass `keyframes=[…]` to skip it entirely.
+  process; a failed probe (`None`) is remembered for only 30 seconds
+  (`FAILED_PROBE_RETRY_SEC`), so a transient failure recovers on a later call
+  without a restart. Pass `keyframes=[…]` to skip probing entirely.
 - **Open-GOP sources are not handled specially.** With open GOPs a "keyframe"
   can still depend on the previous group, and the first frames after a cut may
   show artefacts. Encode with `open-gop=0` if you control the source.

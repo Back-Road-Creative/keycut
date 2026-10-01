@@ -33,6 +33,7 @@ from .extract import (
 )
 from .keyframes import (
     DEFAULT_GOP_DURATION_SEC,
+    FAILED_PROBE_RETRY_SEC,
     clear_keyframe_cache,
     estimate_gop_duration,
     keyframe_at_or_before,
@@ -60,6 +61,7 @@ __version__ = "0.1.0"
 __all__ = [
     "DEFAULT_CRF",
     "DEFAULT_GOP_DURATION_SEC",
+    "FAILED_PROBE_RETRY_SEC",
     "MaskLike",
     "Range",
     "Segment",

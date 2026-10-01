@@ -10,6 +10,7 @@ from __future__ import annotations
 import bisect
 import logging
 import subprocess
+import time
 from collections.abc import Sequence
 from itertools import pairwise
 from pathlib import Path
@@ -26,10 +27,21 @@ keyframe list — this constant is only a floor for the case where probing
 failed entirely.
 """
 
+FAILED_PROBE_RETRY_SEC = 30.0
+"""How long, in seconds, a failed probe is remembered before it may be retried.
+
+Successful probes are cached for the life of the process; a failure is only
+remembered this long, so a transient problem (ffprobe briefly unavailable, a
+file still being written) can recover, while a persistent one is re-probed at
+most once per window rather than on every call.
+"""
+
 # Keyframe timestamps keyed by (resolved path, mtime_ns, size) so a file is
 # probed at most once per process even when several extractions share it.
-# A failed probe caches ``None`` so it is not retried in a loop.
-_keyframe_cache: dict[tuple[str, int, int], list[float] | None] = {}
+# Each value is ``(keyframes, retry_at)``. A success has ``retry_at=None`` and
+# never expires. A failed probe caches ``(None, deadline)`` where ``deadline``
+# is a ``time.monotonic()`` reading; the entry is ignored once it passes.
+_keyframe_cache: dict[tuple[str, int, int], tuple[list[float] | None, float | None]] = {}
 
 
 def clear_keyframe_cache() -> None:
@@ -58,7 +70,9 @@ def probe_keyframes(
     join.
 
     Because it walks the whole packet index, expect roughly a second per hour
-    of footage on a local disk. Results are cached per (path, mtime, size).
+    of footage on a local disk. Results are cached per (path, mtime, size); a
+    failed probe is cached only for :data:`FAILED_PROBE_RETRY_SEC` seconds, so
+    a transient failure recovers on a later call.
 
     ``None`` means "unknown", not "no keyframes". Callers must treat it as a
     reason to re-encode rather than a reason to cut blind.
@@ -71,8 +85,13 @@ def probe_keyframes(
         return None
 
     key = (str(path.resolve()), st.st_mtime_ns, st.st_size)
-    if use_cache and key in _keyframe_cache:
-        return _keyframe_cache[key]
+    if use_cache:
+        cached = _keyframe_cache.get(key)
+        if cached is not None:
+            cached_keyframes, retry_at = cached
+            if retry_at is None or time.monotonic() < retry_at:
+                return cached_keyframes
+            del _keyframe_cache[key]
 
     cmd = [
         ffprobe_bin,
@@ -123,7 +142,8 @@ def probe_keyframes(
         )
 
     if use_cache:
-        _keyframe_cache[key] = keyframes
+        retry_at = None if keyframes is not None else time.monotonic() + FAILED_PROBE_RETRY_SEC
+        _keyframe_cache[key] = (keyframes, retry_at)
     return keyframes
 
 
