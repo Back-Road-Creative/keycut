@@ -104,6 +104,31 @@ class TestProbeKeyframes:
         assert len(calls) == 1, "a second probe of the same file must hit the cache"
         assert calls[0][0] == "ffprobe"
 
+    def test_the_probe_window_scales_with_the_file_size(self, tmp_path):
+        """ffprobe reads every packet, so the probe takes as long as reading
+        the whole file. A 110 GB day master on a slow mount needed far more
+        than the flat 600 s and was killed, which sent every cut down the
+        re-encode path."""
+        big = tmp_path / "day_master.mp4"
+        with big.open("wb") as fh:
+            fh.truncate(118_000_000_000)  # sparse: no disk is used
+        small = tmp_path / "short.mp4"
+        small.write_bytes(b"not really a video")
+        timeouts = []
+
+        def _fake_run(cmd, *a, **kw):
+            timeouts.append(kw.get("timeout"))
+            return MagicMock(returncode=0, stdout=b"0.000000,K__\n", stderr=b"")
+
+        with patch("keycut.keyframes.subprocess.run", side_effect=_fake_run):
+            probe_keyframes(small)
+            probe_keyframes(big)
+
+        assert timeouts[0] == 600.0, "a small file keeps the 600 s floor"
+        assert timeouts[1] >= 118_000_000_000 / 20_000_000, (
+            "a 118 GB file gets at least 20 MB/s worth of time"
+        )
+
     def test_missing_file_returns_none(self, tmp_path):
         assert probe_keyframes(tmp_path / "nope.mp4") is None
 

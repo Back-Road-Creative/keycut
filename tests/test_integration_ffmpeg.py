@@ -266,10 +266,10 @@ class TestRealExtractions:
         """``keyframes=[]`` declares them unusable, so every range re-encodes.
 
         This is the one path that returns exactly what was asked for — 60
-        frames, no more and no fewer — and it pins the semantics keycut relies
-        on: with ``-ss``/``-to`` placed after ``-i``, both are still read in the
-        input's timeline, so ``-to 12.5`` means 12.5 in the source and not 12.5
-        seconds after the seek.
+        frames, no more and no fewer. The audio is stream-copied, and after an
+        input seek it would start at the keyframe (10.0), half a second early,
+        hidden behind an edit list the concat demuxer ignores. The output-side
+        ``-ss 0`` drops it, so the file is 2.0 s long in both streams.
         """
         out = extract_and_concat_ranges(
             source, [(10.5, 12.5)], tmp_path / "out.mp4", tmp_path / "work",
@@ -277,6 +277,9 @@ class TestRealExtractions:
         )
         assert out is not None
         assert len(video_packets(out)) == int(2.0 * FIXTURE_FPS)
+        assert probe_duration(out) == pytest.approx(2.0, abs=0.1), (
+            "audio from before the cut leaked into the re-encoded range"
+        )
         assert decodes_cleanly(out)
 
 

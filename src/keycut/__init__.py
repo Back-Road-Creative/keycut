@@ -23,6 +23,7 @@ from __future__ import annotations
 from .attribution import assign_clips_by_source_window
 from .extract import (
     DEFAULT_CRF,
+    REENCODE_SEC_PER_SEC,
     concat_demuxer,
     default_reencode_args,
     extract_and_concat_ranges,
@@ -34,8 +35,10 @@ from .extract import (
 from .keyframes import (
     DEFAULT_GOP_DURATION_SEC,
     FAILED_PROBE_RETRY_SEC,
+    MIN_IO_BYTES_PER_SEC,
     clear_keyframe_cache,
     estimate_gop_duration,
+    io_timeout,
     keyframe_at_or_before,
     probe_keyframes,
     snap_start_to_keyframe,
@@ -56,12 +59,14 @@ from .segments import (
     segments_to_master_ranges,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 __all__ = [
     "DEFAULT_CRF",
     "DEFAULT_GOP_DURATION_SEC",
     "FAILED_PROBE_RETRY_SEC",
+    "MIN_IO_BYTES_PER_SEC",
+    "REENCODE_SEC_PER_SEC",
     "MaskLike",
     "Range",
     "Segment",
@@ -76,6 +81,7 @@ __all__ = [
     "estimate_gop_duration",
     "extract_and_concat_ranges",
     "extract_and_concat_segments",
+    "io_timeout",
     "keyframe_at_or_before",
     "merge_ranges",
     "probe_keyframes",

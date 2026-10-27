@@ -56,11 +56,13 @@ class FakeFfmpeg:
         self.stream_stdout = stream_stdout
         self.returncode = returncode
         self.commands: list[list[str]] = []
+        self.timeouts: list[float | None] = []
         self.list_files: list[str] = []
 
     def __call__(self, cmd, *args, **kwargs):
         cmd = list(cmd)
         self.commands.append(cmd)
+        self.timeouts.append(kwargs.get("timeout"))
         joined = " ".join(cmd)
         if cmd[0].endswith("ffprobe"):
             if "packet=" in joined:

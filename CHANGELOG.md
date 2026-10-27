@@ -4,10 +4,24 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.1.2 - 2026-10-27
 
 ### Fixed
 
+- Every ffmpeg and ffprobe step now sizes its timeout to the file it reads,
+  at a 20 MB/s floor (`MIN_IO_BYTES_PER_SEC`, `io_timeout`), instead of a
+  flat window. The keyframe probe (600 s floor), a stream copy (1800 s floor)
+  and the concat (1800 s floor, twice the bytes with `faststart`) all read
+  the whole file. A 110 GB master on a slow mount took longer than 600 s to
+  probe, so keyframes came back unknown and every range fell back to a
+  re-encode.
+- The re-encode fallback seeks on the input side (`-ss S -i master -ss 0
+  -t D`) instead of the output side, so it decodes at most one GOP before
+  the cut rather than everything from the start of the file. It is still
+  frame-exact. The output-side `-ss 0` drops the stream-copied audio's
+  pre-cut packets, which the concat demuxer would otherwise play. Its
+  timeout is at least 20 s per second of footage
+  (`REENCODE_SEC_PER_SEC`), with a 3600 s floor.
 - `probe_keyframes` no longer caches a failed probe forever: `None` is now
   remembered for `FAILED_PROBE_RETRY_SEC` (30 s), so a transient ffprobe
   failure on unchanged media recovers, and repeated failures are re-probed at

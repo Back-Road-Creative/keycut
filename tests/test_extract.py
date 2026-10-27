@@ -16,6 +16,7 @@ from conftest import (
 )
 from keycut import (
     Segment,
+    concat_demuxer,
     default_reencode_args,
     extract_and_concat_ranges,
     extract_and_concat_segments,
@@ -36,6 +37,16 @@ def _ss(cmd):
 
 def _to(cmd):
     return float(cmd[cmd.index("-to") + 1])
+
+
+def _t(cmd):
+    return float(cmd[cmd.index("-t") + 1])
+
+
+def _sparse(path, size):
+    with path.open("wb") as fh:
+        fh.truncate(size)  # no disk is used
+    return path
 
 
 class TestHappyPath:
@@ -169,8 +180,17 @@ class TestReencodeFallback:
         assert result is not None
         cmd = fake.extract_commands[0]
         assert is_reencode(cmd)
-        assert not seek_is_input_side(cmd), "an accurate seek must be output-side"
+        assert seek_is_input_side(cmd), (
+            "an output-side seek decodes everything before the cut; a re-encode "
+            "with an input-side seek is just as exact (ffmpeg's -accurate_seek)"
+        )
         assert _ss(cmd) == 100.0, "the re-encode lands on the exact requested frame"
+        assert _t(cmd) == 60.0, "the input seek resets timestamps, so length is -t"
+        after_input = cmd[cmd.index("-i"):]
+        assert "-ss" in after_input and float(after_input[after_input.index("-ss") + 1]) == 0.0, (
+            "stream-copied audio keeps the packets back to the keyframe at negative "
+            "timestamps; an output-side -ss 0 drops them"
+        )
 
     def test_a_clean_cut_still_takes_the_lossless_path(self, master, tmp_path):
         with fake_ffmpeg() as fake:
@@ -376,3 +396,62 @@ class TestDefaultReencodeArgs:
         # Guards the fixture itself: if DEFAULT_STREAM_JSON drifts, every
         # assertion above silently starts testing something else.
         assert b"h264" in DEFAULT_STREAM_JSON
+
+
+class TestLargeMasterTimeouts:
+    """A day master can be 100+ GB on a slow mount. Every ffmpeg step gets a
+    window sized to the work, so a healthy run is never killed as a hang."""
+
+    def test_a_stream_copy_window_scales_with_the_master(self, tmp_path):
+        master = _sparse(tmp_path / "day_master.mp4", 118_000_000_000)
+        with fake_ffmpeg() as fake:
+            extract_and_concat_ranges(
+                master, [(100.0, 160.0)], tmp_path / "out.mp4", tmp_path / "work",
+                keyframes=[100.0, 200.0],
+            )
+        copy_idx = fake.commands.index(fake.extract_commands[0])
+        assert fake.timeouts[copy_idx] >= 118_000_000_000 / 20_000_000
+
+    def test_a_small_stream_copy_keeps_the_1800s_floor(self, master, tmp_path):
+        with fake_ffmpeg() as fake:
+            extract_and_concat_ranges(
+                master, [(100.0, 160.0)], tmp_path / "out.mp4", tmp_path / "work",
+                keyframes=[100.0, 200.0],
+            )
+        copy_idx = fake.commands.index(fake.extract_commands[0])
+        assert fake.timeouts[copy_idx] == 1800.0
+
+    def test_a_re_encode_window_scales_with_the_range_length(self, master, tmp_path):
+        """A 1147 s range of 4K re-encoded with x265 on a CPU runs for hours,
+        far past the flat 3600 s."""
+        with fake_ffmpeg() as fake:
+            extract_and_concat_ranges(
+                master, [(3000.0, 4147.0)], tmp_path / "out.mp4", tmp_path / "work",
+                keyframes=[], reencode_args=["-c:v", "libx265"],
+            )
+        idx = fake.commands.index(fake.extract_commands[0])
+        assert fake.timeouts[idx] >= 1147.0 * 20
+
+    def test_a_short_re_encode_keeps_the_3600s_floor(self, master, tmp_path):
+        with fake_ffmpeg() as fake:
+            extract_and_concat_ranges(
+                master, [(100.0, 102.0)], tmp_path / "out.mp4", tmp_path / "work",
+                keyframes=[], reencode_args=["-c:v", "libx265"],
+            )
+        idx = fake.commands.index(fake.extract_commands[0])
+        assert fake.timeouts[idx] == 3600.0
+
+    def test_a_concat_window_scales_with_the_pieces(self, tmp_path):
+        parts = [
+            _sparse(tmp_path / "a.mp4", 30_000_000_000),
+            _sparse(tmp_path / "b.mp4", 21_000_000_000),
+        ]
+        with fake_ffmpeg() as fake:
+            concat_demuxer(parts, tmp_path / "out.mp4", tmp_path / "list.txt",
+                           faststart=False)
+            concat_demuxer(parts, tmp_path / "out2.mp4", tmp_path / "list2.txt")
+        plain, faststart = fake.timeouts
+        assert plain >= 51_000_000_000 / 20_000_000
+        assert faststart >= 2 * 51_000_000_000 / 20_000_000, (
+            "+faststart rewrites the whole output a second time"
+        )
