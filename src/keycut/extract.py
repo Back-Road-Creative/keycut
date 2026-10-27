@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import subprocess
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -22,6 +23,7 @@ from .ranges import (
     copy_would_snap_back_over_excluded,
     merge_ranges,
 )
+from .receipt import AssemblyReceipt, ReceiptSpan
 from .segments import Segment, segments_to_master_ranges
 
 logger = logging.getLogger(__name__)
@@ -301,6 +303,46 @@ def _run_ffmpeg(cmd: list[str], what: str, timeout: float) -> bool:
     return True
 
 
+def _probe_duration(
+    path: Path | str, ffprobe_bin: str = "ffprobe", timeout: float = 60.0
+) -> float | None:
+    """The container duration of ``path`` in seconds, or ``None`` if it cannot
+    be probed. The timeout is a floor, raised to fit the file's size."""
+    cmd = [
+        ffprobe_bin, "-v", "error", "-show_entries", "format=duration",
+        "-of", "csv=p=0", str(path),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=io_timeout(timeout, _size(path)))
+        if result.returncode != 0:
+            return None
+        value = float((result.stdout or b"").decode("utf-8", errors="replace").strip())
+    except Exception as exc:
+        logger.debug("keycut: duration probe failed for %s: %s", path, exc)
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
+
+
+def _requested_membership(
+    ranges: Sequence[Range],
+    n_merged: int,
+    max_gap_sec: float,
+    mask_lookup: MaskLike | None,
+) -> list[tuple[int, ...]]:
+    """For each merged span, the indices of the requested ranges it absorbed.
+
+    Replays :func:`merge_ranges` over growing prefixes: it only ever extends or
+    appends to the last span, so range ``k`` belongs to span
+    ``len(merge(ranges[:k+1])) - 1``. Exact by construction, no second copy of
+    the merge rule.
+    """
+    members: list[list[int]] = [[] for _ in range(n_merged)]
+    for k in range(len(ranges)):
+        count = len(merge_ranges(ranges[: k + 1], max_gap_sec=max_gap_sec, is_excluded=mask_lookup))
+        members[count - 1].append(k)
+    return [tuple(m) for m in members]
+
+
 def extract_and_concat_ranges(
     master_path: Path | str,
     ranges: Sequence[Range],
@@ -317,6 +359,46 @@ def extract_and_concat_ranges(
     keep_scratch: bool = False,
     faststart: bool = True,
 ) -> Path | None:
+    """Cut every range out of ``master_path`` and join them into one file.
+
+    Returns ``output_path`` on success, ``None`` on any failure. See
+    :func:`extract_and_concat_ranges_with_receipt` for the full description of
+    the algorithm and every argument; this is the same call without the receipt.
+    """
+    path, _ = extract_and_concat_ranges_with_receipt(
+        master_path,
+        ranges,
+        output_path,
+        work_dir,
+        exclude_mask=exclude_mask,
+        max_gap_sec=max_gap_sec,
+        reencode_args=reencode_args,
+        allow_reencode=allow_reencode,
+        keyframes=keyframes,
+        ffmpeg_bin=ffmpeg_bin,
+        ffprobe_bin=ffprobe_bin,
+        keep_scratch=keep_scratch,
+        faststart=faststart,
+    )
+    return path
+
+
+def extract_and_concat_ranges_with_receipt(
+    master_path: Path | str,
+    ranges: Sequence[Range],
+    output_path: Path | str,
+    work_dir: Path | str,
+    *,
+    exclude_mask: MaskLike | None = None,
+    max_gap_sec: float | None = None,
+    reencode_args: Sequence[str] | None = None,
+    allow_reencode: bool = True,
+    keyframes: Sequence[float] | None = None,
+    ffmpeg_bin: str = "ffmpeg",
+    ffprobe_bin: str = "ffprobe",
+    keep_scratch: bool = False,
+    faststart: bool = True,
+) -> tuple[Path | None, AssemblyReceipt | None]:
     """Cut every range out of ``master_path`` and join them into one file.
 
     The whole algorithm, in order:
@@ -358,9 +440,12 @@ def extract_and_concat_ranges(
             ``work_dir`` for inspection.
 
     Returns:
-        ``output_path`` on success, ``None`` on any failure — missing master,
-        empty range list, or an ffmpeg command that exited non-zero. Nothing
-        raises; a failed extraction is a normal outcome to branch on.
+        ``(output_path, receipt)`` on success: an :class:`AssemblyReceipt`
+        recording each merged span, its keyframe-snapped source start, whether
+        it was copied or re-encoded and why, and where it landed in the output.
+        ``(None, None)`` on any failure — missing master, empty range list, or
+        an ffmpeg command that exited non-zero. Nothing raises; a failed
+        extraction is a normal outcome to branch on.
     """
     master_path = Path(master_path)
     output_path = Path(output_path)
@@ -368,11 +453,12 @@ def extract_and_concat_ranges(
 
     if not master_path.exists():
         logger.error("keycut: master missing: %s", master_path)
-        return None
+        return None, None
     if not ranges:
         logger.error("keycut: no ranges to extract from %s", master_path)
-        return None
+        return None, None
 
+    master_size = _size(master_path)
     work_dir.mkdir(parents=True, exist_ok=True)
     mask_lookup = as_mask_lookup(exclude_mask)
 
@@ -399,6 +485,7 @@ def extract_and_concat_ranges(
         reencode_args = default_reencode_args(master_path, ffprobe_bin=ffprobe_bin)
 
     parts: list[Path] = []
+    plans: list[tuple[float, float, str, str]] = []  # source_start, source_end, method, reason
     for i, (start, end) in enumerate(merged):
         part = work_dir / f"keycut_{i:03d}{output_path.suffix or '.mp4'}"
         aligned = snap_start_to_keyframe(start, end, keyframes)
@@ -411,6 +498,7 @@ def extract_and_concat_ranges(
                 ffmpeg_bin=ffmpeg_bin,
             )
             how = "re-encode (keyframes unknown)"
+            plan = (start, end, "reencode", "keyframes_unknown")
         elif allow_reencode and copy_would_snap_back_over_excluded(
             aligned, keyframes, mask_lookup
         ):
@@ -420,6 +508,7 @@ def extract_and_concat_ranges(
                 ffmpeg_bin=ffmpeg_bin,
             )
             how = "re-encode (copy would snap back over excluded footage)"
+            plan = (start, end, "reencode", "snap_back_over_excluded")
         else:
             if aligned != start:
                 logger.debug("keycut: range %d start aligned %.3f -> %.3f", i, start, aligned)
@@ -427,20 +516,61 @@ def extract_and_concat_ranges(
                 master_path, aligned, end, part, ffmpeg_bin=ffmpeg_bin
             )
             how = "stream copy"
+            plan = (aligned, end, "copy", "stream_copy")
 
         if not ok:
             logger.error(
                 "keycut: %s failed on range %d/%d (%.3f -> %.3f) of %s",
                 how, i + 1, len(merged), start, end, master_path,
             )
-            return None
+            return None, None
         parts.append(part)
+        plans.append(plan)
+
+    part_durations = [_probe_duration(p, ffprobe_bin) for p in parts]
 
     list_file = work_dir / f"{output_path.stem}_concat.txt"
     if not concat_demuxer(
         parts, output_path, list_file, ffmpeg_bin=ffmpeg_bin, faststart=faststart
     ):
-        return None
+        return None, None
+
+    spans: list[ReceiptSpan] = []
+    cursor = 0.0
+    membership = _requested_membership(ranges, len(merged), max_gap_sec, mask_lookup)
+    for i, ((m_start, m_end), (src_start, src_end, method, reason)) in enumerate(
+        zip(merged, plans, strict=True)
+    ):
+        probed = part_durations[i]
+        duration = probed if probed is not None else src_end - src_start
+        spans.append(
+            ReceiptSpan(
+                index=i,
+                requested_indices=membership[i],
+                merged_start=float(m_start),
+                merged_end=float(m_end),
+                source_start=float(src_start),
+                source_end=float(src_end),
+                method=method,
+                reason=reason,
+                output_start=cursor,
+                output_end=cursor + duration,
+                duration_source="probed" if probed is not None else "planned",
+            )
+        )
+        cursor += duration
+    from . import __version__
+
+    receipt = AssemblyReceipt(
+        keycut_version=__version__,
+        master_path=str(master_path),
+        master_size_bytes=master_size,
+        max_gap_sec=float(max_gap_sec),
+        requested=tuple((float(a), float(b)) for a, b in ranges),
+        spans=tuple(spans),
+        output_path=str(output_path),
+        output_duration=_probe_duration(output_path, ffprobe_bin),
+    )
 
     if not keep_scratch:
         for p in [*parts, list_file]:
@@ -449,7 +579,7 @@ def extract_and_concat_ranges(
             except OSError:
                 pass
 
-    return output_path
+    return output_path, receipt
 
 
 def extract_and_concat_segments(
@@ -468,11 +598,27 @@ def extract_and_concat_segments(
     names a part outside ``boundaries``, so one bad reference fails the whole
     extraction visibly instead of producing a short output nobody notices.
     """
+    path, _ = extract_and_concat_segments_with_receipt(
+        master_path, segments, boundaries, output_path, work_dir, **kwargs
+    )
+    return path
+
+
+def extract_and_concat_segments_with_receipt(
+    master_path: Path | str,
+    segments: Iterable[Segment],
+    boundaries: Sequence[Range],
+    output_path: Path | str,
+    work_dir: Path | str,
+    **kwargs,
+) -> tuple[Path | None, AssemblyReceipt | None]:
+    """:func:`extract_and_concat_segments` that also returns the
+    :class:`AssemblyReceipt`. ``(None, None)`` on any failure."""
     try:
         ranges = segments_to_master_ranges(segments, boundaries)
     except IndexError as exc:
         logger.error("keycut: segment translation failed: %s", exc)
-        return None
-    return extract_and_concat_ranges(
+        return None, None
+    return extract_and_concat_ranges_with_receipt(
         master_path, ranges, output_path, work_dir, **kwargs
     )

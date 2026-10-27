@@ -334,6 +334,9 @@ Cutting:
 | `extract_and_concat_ranges(master, ranges, output_path, work_dir, **opts)` | The main entry point. Returns the output path, or `None` on failure. |
 | `extract_and_concat_segments(master, segments, boundaries, output_path, work_dir, **opts)` | Same, for ranges expressed against the master's source clips. |
 
+| `extract_and_concat_ranges_with_receipt(...)` | Same arguments; returns `(path, receipt)`, or `(None, None)` on failure. See [The assembly receipt](#the-assembly-receipt). |
+| `extract_and_concat_segments_with_receipt(...)` | The segment form of the above. |
+
 Options: `exclude_mask`, `max_gap_sec`, `reencode_args`, `allow_reencode`,
 `keyframes`, `ffmpeg_bin`, `ffprobe_bin`, `keep_scratch`, `faststart`.
 
@@ -359,6 +362,63 @@ Optional companion, not part of the cutting path:
 `assign_clips_by_source_window(clips, groups, boundaries)` — when one master
 feeds two independent products, works out which output each derived clip came
 from, by source footage rather than by dividing one count into another.
+
+## The assembly receipt
+
+`extract_and_concat_ranges` returns only a path. To learn what was actually cut
+— where each cut start snapped, which requested ranges were merged, and whether
+a span was copied or re-encoded — call the `_with_receipt` form:
+
+```python
+from keycut import extract_and_concat_ranges_with_receipt
+
+path, receipt = extract_and_concat_ranges_with_receipt(
+    "master.mp4", [(3.0, 9.0), (15.0, 21.0)], "out.mp4", "scratch/"
+)
+if receipt is not None:
+    receipt.write_json("out.receipt.json")
+```
+
+The receipt is `None` exactly when the path is. `receipt.to_dict()` returns the
+schema below; `AssemblyReceipt.from_dict()` reads it back.
+
+```json
+{
+  "schema": "keycut-assembly-receipt/1",
+  "provenance": "keycut",
+  "keycut_version": "0.2.0",
+  "master": {"path": "master.mp4", "size_bytes": 123456},
+  "time_base": "seconds",
+  "max_gap_sec": 2.0,
+  "requested": [[3.0, 9.0], [15.0, 21.0]],
+  "spans": [
+    {"index": 0, "requested_indices": [0],
+     "merged_start": 3.0, "merged_end": 9.0,
+     "source_start": 4.0, "source_end": 9.0,
+     "method": "copy", "reason": "stream_copy",
+     "output_start": 0.0, "output_end": 5.0,
+     "duration_source": "probed"}
+  ],
+  "output": {"path": "out.mp4", "duration": 11.0}
+}
+```
+
+All times are seconds, half-open `[start, end)`.
+
+- `requested_indices`: the input ranges that were merged into this span.
+- `merged_start` / `merged_end`: the span after merging, before any alignment.
+- `source_start`: where the cut really begins in the master. For `copy` it is
+  the keyframe the start was snapped forward to; for `reencode` it equals
+  `merged_start`, because a re-encode seeks exactly. `source_end` is
+  `merged_end`.
+- `method` / `reason`: `copy` with `stream_copy`; or `reencode` with
+  `keyframes_unknown` or `snap_back_over_excluded`.
+- `output_start` / `output_end`: where the span lands in the output, contiguous
+  from 0 in output order. The length is the part's probed duration
+  (`duration_source: "probed"`); if ffprobe fails it is
+  `source_end - source_start` and `duration_source` is `"planned"`.
+- `output.duration` is the probed duration of the final file, `null` if the
+  probe failed.
 
 ## Development
 

@@ -51,7 +51,17 @@ class FakeFfmpeg:
     afterwards.
     """
 
-    def __init__(self, *, keyframe_stdout: bytes, stream_stdout: bytes, returncode: int = 0):
+    def __init__(
+        self,
+        *,
+        keyframe_stdout: bytes,
+        stream_stdout: bytes,
+        returncode: int = 0,
+        durations: list[float] | None = None,
+    ):
+        # ``format=duration`` probes answer from this list in call order; a
+        # missing entry (or ``None`` list) makes that probe fail.
+        self.durations = list(durations) if durations is not None else []
         self.keyframe_stdout = keyframe_stdout
         self.stream_stdout = stream_stdout
         self.returncode = returncode
@@ -65,6 +75,12 @@ class FakeFfmpeg:
         self.timeouts.append(kwargs.get("timeout"))
         joined = " ".join(cmd)
         if cmd[0].endswith("ffprobe"):
+            if "format=duration" in joined:
+                if not self.durations:
+                    return MagicMock(returncode=1, stdout=b"", stderr=b"no duration")
+                return MagicMock(
+                    returncode=0, stdout=f"{self.durations.pop(0)}\n".encode(), stderr=b""
+                )
             if "packet=" in joined:
                 return MagicMock(returncode=0, stdout=self.keyframe_stdout, stderr=b"")
             return MagicMock(returncode=0, stdout=self.stream_stdout, stderr=b"")
@@ -110,6 +126,7 @@ def fake_ffmpeg(
     keyframe_stdout: bytes | None = None,
     stream_stdout: bytes | None = None,
     returncode: int = 0,
+    durations: list[float] | None = None,
 ):
     """Patch both modules' ``subprocess.run`` with one :class:`FakeFfmpeg`.
 
@@ -120,6 +137,7 @@ def fake_ffmpeg(
         keyframe_stdout=keyframe_csv() if keyframe_stdout is None else keyframe_stdout,
         stream_stdout=DEFAULT_STREAM_JSON if stream_stdout is None else stream_stdout,
         returncode=returncode,
+        durations=durations,
     )
     with patch("keycut.extract.subprocess.run", side_effect=fake), patch(
         "keycut.keyframes.subprocess.run", side_effect=fake
