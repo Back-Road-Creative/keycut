@@ -10,13 +10,19 @@ tone. No sample media ships with this repository.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from conftest import requires_ffmpeg
-from keycut import extract_and_concat_ranges, probe_keyframes
+from keycut import (
+    AssemblyReceipt,
+    extract_and_concat_ranges,
+    extract_and_concat_ranges_with_receipt,
+    probe_keyframes,
+)
 from keycut.cli import main
 
 pytestmark = requires_ffmpeg
@@ -298,3 +304,33 @@ class TestCliAgainstRealFfmpeg:
         out = capsys.readouterr().out
         assert "keyframes: 15" in out
         assert "merge gap: 2.1" in out, "measured from the fixture's real 2.0s GOP"
+
+
+class TestAssemblyReceipt:
+    def test_receipt_describes_the_real_output(self, source, tmp_path):
+        # 3.0 and 15.0 sit mid-GOP (keyframes every 2.0 s), so each copy must
+        # start on the next keyframe: 4.0 and 16.0.
+        out, receipt = extract_and_concat_ranges_with_receipt(
+            source,
+            [(3.0, 9.0), (15.0, 21.0)],
+            tmp_path / "out.mp4",
+            tmp_path / "work",
+        )
+        assert out is not None and receipt is not None
+        assert [s.method for s in receipt.spans] == ["copy", "copy"]
+        assert [s.requested_indices for s in receipt.spans] == [(0,), (1,)]
+        assert receipt.spans[0].merged_start == 3.0
+        assert receipt.spans[0].source_start == pytest.approx(4.0, abs=1e-3)
+        assert receipt.spans[1].source_start == pytest.approx(16.0, abs=1e-3)
+        assert all(s.duration_source == "probed" for s in receipt.spans)
+
+        one_frame = 1.0 / FIXTURE_FPS
+        assert receipt.spans[0].output_start == 0.0
+        assert receipt.spans[1].output_start == receipt.spans[0].output_end
+        real = probe_duration(out)
+        assert receipt.spans[-1].output_end == pytest.approx(real, abs=one_frame)
+        assert receipt.output_duration == pytest.approx(real, abs=1e-3)
+
+        # The receipt survives a JSON round trip unchanged.
+        path = receipt.write_json(tmp_path / "receipt.json")
+        assert AssemblyReceipt.from_dict(json.loads(path.read_text())) == receipt

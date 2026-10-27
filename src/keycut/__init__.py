@@ -27,7 +27,9 @@ from .extract import (
     concat_demuxer,
     default_reencode_args,
     extract_and_concat_ranges,
+    extract_and_concat_ranges_with_receipt,
     extract_and_concat_segments,
+    extract_and_concat_segments_with_receipt,
     probe_video_params,
     reencode_range,
     stream_copy_range,
@@ -51,6 +53,7 @@ from .ranges import (
     merge_ranges,
     span_has_excluded_second,
 )
+from .receipt import AssemblyReceipt, ReceiptSpan
 from .segments import (
     Segment,
     boundaries_from_durations,
@@ -59,9 +62,10 @@ from .segments import (
     segments_to_master_ranges,
 )
 
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 
 __all__ = [
+    "AssemblyReceipt",
     "DEFAULT_CRF",
     "DEFAULT_GOP_DURATION_SEC",
     "FAILED_PROBE_RETRY_SEC",
@@ -69,6 +73,7 @@ __all__ = [
     "REENCODE_SEC_PER_SEC",
     "MaskLike",
     "Range",
+    "ReceiptSpan",
     "Segment",
     "__version__",
     "as_mask_lookup",
@@ -80,7 +85,9 @@ __all__ = [
     "default_reencode_args",
     "estimate_gop_duration",
     "extract_and_concat_ranges",
+    "extract_and_concat_ranges_with_receipt",
     "extract_and_concat_segments",
+    "extract_and_concat_segments_with_receipt",
     "io_timeout",
     "keyframe_at_or_before",
     "merge_ranges",

@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.0 - 2026-10-27
+
+### Added
+
+- Assembly receipt, schema `keycut-assembly-receipt/1`: a record of what an
+  extraction actually cut. For each merged span it gives the requested ranges
+  absorbed, the keyframe-snapped source start, copy versus re-encode and the
+  reason, and where the span landed in the output (parts are probed with
+  ffprobe; a failed probe falls back to the planned length and says so).
+  `AssemblyReceipt` and `ReceiptSpan` offer `to_dict()`, `from_dict()` and
+  `write_json()`.
+- `extract_and_concat_ranges_with_receipt` and
+  `extract_and_concat_segments_with_receipt`, returning `(path, receipt)`, or
+  `(None, None)` on failure. `extract_and_concat_ranges` and
+  `extract_and_concat_segments` are unchanged in signature and behaviour.
+
 ## 0.1.2 - 2026-10-27
 
 ### Fixed
