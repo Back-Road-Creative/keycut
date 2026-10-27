@@ -36,6 +36,24 @@ file still being written) can recover, while a persistent one is re-probed at
 most once per window rather than on every call.
 """
 
+MIN_IO_BYTES_PER_SEC = 20_000_000
+"""Slowest read/write rate, in bytes per second, a healthy ffmpeg or ffprobe
+run is assumed to sustain.
+
+Every subprocess timeout here is a hang guard, so it must outlast honest work.
+Reading a 118 GB day master over a network or 9p mount (WSL's ``/mnt/c``)
+runs at roughly 50 MB/s; a flat 600 s or 1800 s window kills that read
+part-way through. :func:`io_timeout` sizes each window to the bytes involved
+at this floor.
+"""
+
+
+def io_timeout(floor_sec: float, nbytes: int) -> float:
+    """``floor_sec``, or the time to move ``nbytes`` at
+    :data:`MIN_IO_BYTES_PER_SEC`, whichever is longer."""
+    return max(float(floor_sec), nbytes / MIN_IO_BYTES_PER_SEC)
+
+
 # Keyframe timestamps keyed by (resolved path, mtime_ns, size) so a file is
 # probed at most once per process even when several extractions share it.
 # Each value is ``(keyframes, retry_at)``. A success has ``retry_at=None`` and
@@ -70,9 +88,12 @@ def probe_keyframes(
     join.
 
     Because it walks the whole packet index, expect roughly a second per hour
-    of footage on a local disk. Results are cached per (path, mtime, size); a
-    failed probe is cached only for :data:`FAILED_PROBE_RETRY_SEC` seconds, so
-    a transient failure recovers on a later call.
+    of footage on a local disk; ffprobe still reads every byte, so on a slow
+    mount it takes as long as reading the file. ``timeout`` is a floor: the
+    window grows with the file's size (see :func:`io_timeout`). Results are
+    cached per (path, mtime, size); a failed probe is cached only for
+    :data:`FAILED_PROBE_RETRY_SEC` seconds, so a transient failure recovers on
+    a later call.
 
     ``None`` means "unknown", not "no keyframes". Callers must treat it as a
     reason to re-encode rather than a reason to cut blind.
@@ -108,7 +129,9 @@ def probe_keyframes(
 
     keyframes: list[float] | None = None
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        result = subprocess.run(
+            cmd, capture_output=True, timeout=io_timeout(timeout, st.st_size)
+        )
         if result.returncode == 0:
             parsed: list[float] = []
             for line in (result.stdout or b"").decode("utf-8", errors="replace").splitlines():

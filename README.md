@@ -161,8 +161,12 @@ extract_and_concat_ranges(
 Two things change. The merge refuses to close a gap containing an excluded
 second, however narrow — merging would re-admit exactly what you banned. And
 for any range where a copy would still snap back across an excluded second,
-that one range is re-encoded with a frame-accurate seek (`-ss` after `-i`),
-while every other range is still copied losslessly.
+that one range is re-encoded with a frame-accurate seek, while every other
+range is still copied losslessly. The re-encode seeks on the input side
+(`-ss S -i master -ss 0 -t D`): the demuxer jumps to the keyframe before the
+cut, the decoder drops frames up to the exact start, and the output-side
+`-ss 0` drops the copied audio's pre-cut packets. That decodes at most one GOP
+before the cut, not the whole file before it.
 
 The re-encode arguments are derived from the master's own codec, pixel format
 and colour metadata, because the concat demuxer joins streams without
@@ -342,7 +346,8 @@ The pieces, usable on their own:
 | `snap_start_to_keyframe(start, end_limit, keyframes)` | Move a cut start forward onto a keyframe. |
 | `keyframe_at_or_before(t, keyframes)` | Where `-ss t -c copy` would actually land. |
 | `merge_ranges(ranges, max_gap_sec, is_excluded)` | Collapse overlapping, touching and sub-GOP-separated ranges. |
-| `stream_copy_range` / `reencode_range` / `concat_demuxer` | The three ffmpeg invocations. |
+| `stream_copy_range` / `reencode_range` / `concat_demuxer` | The three ffmpeg invocations. Each timeout is a floor, raised to fit the file's size or the range's length. |
+| `io_timeout(floor_sec, nbytes)` | A timeout long enough to read `nbytes` at `MIN_IO_BYTES_PER_SEC` (20 MB/s). |
 | `default_reencode_args(master)` | Concat-compatible encoder arguments derived from the master. |
 | `probe_video_params(master)` | Codec, pixel format and colour metadata of the first video stream. |
 

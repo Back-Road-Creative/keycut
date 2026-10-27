@@ -11,6 +11,7 @@ from pathlib import Path
 from .keyframes import (
     DEFAULT_GOP_DURATION_SEC,
     estimate_gop_duration,
+    io_timeout,
     probe_keyframes,
     snap_start_to_keyframe,
 )
@@ -135,6 +136,12 @@ def default_reencode_args(
     return args
 
 
+REENCODE_SEC_PER_SEC = 20.0
+"""Seconds of wall-clock allowed per second of footage re-encoded by
+:func:`reencode_range` — 1.5 fps at 30 fps, slower than x265 ``-preset slow``
+manages on 4K with a modern CPU."""
+
+
 def stream_copy_range(
     master_path: Path | str,
     start_sec: float,
@@ -156,6 +163,9 @@ def stream_copy_range(
     Pass a keyframe-aligned start (see
     :func:`keycut.snap_start_to_keyframe`) or the output will contain footage
     from before the cut.
+
+    ``timeout`` is a floor, raised to the time to read the whole master (see
+    :func:`keycut.io_timeout`), since no range can be larger than that.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -172,7 +182,7 @@ def stream_copy_range(
         "copy",
         str(output_path),
     ]
-    return _run_ffmpeg(cmd, "stream copy", timeout)
+    return _run_ffmpeg(cmd, "stream copy", io_timeout(timeout, _size(master_path)))
 
 
 def reencode_range(
@@ -187,11 +197,20 @@ def reencode_range(
 ) -> bool:
     """Decode and re-encode ``[start_sec, end_sec)`` with a frame-accurate seek.
 
-    ``-ss``/``-to`` go *after* ``-i``, making them output options: ffmpeg
-    decodes from the beginning of the file and discards frames until the exact
-    requested timestamp. That costs a full decode of everything before the cut,
-    and it re-encodes what it keeps — but it lands on the requested frame
-    rather than the previous keyframe.
+    ``-ss`` goes *before* ``-i``: the demuxer seeks to the keyframe at or before
+    ``start_sec``, and because this transcodes, ffmpeg's ``-accurate_seek`` (on
+    by default) decodes and drops the frames between that keyframe and the
+    exact start. The output lands on the requested frame, like an output-side
+    seek, but decodes at most one GOP before the cut instead of everything
+    from the start of the file. Timestamps restart at zero after an input
+    seek, so the length is given with ``-t``.
+
+    Stream-copied audio is not trimmed by the input seek: its packets from the
+    keyframe on survive at negative timestamps behind an edit list, which the
+    concat demuxer ignores. An output-side ``-ss 0`` drops them.
+
+    ``timeout`` is a floor, raised to :data:`REENCODE_SEC_PER_SEC` seconds per
+    second of footage: a long 4K range through a CPU encoder runs for hours.
 
     This is the escape hatch for the two cases a stream copy cannot serve:
     keyframe positions are unknown, or the snap-back region contains footage
@@ -199,19 +218,24 @@ def reencode_range(
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    duration = float(end_sec) - float(start_sec)
     cmd = [
         ffmpeg_bin,
         "-y",
+        "-ss",
+        f"{float(start_sec)}",
         "-i",
         str(master_path),
         "-ss",
-        f"{float(start_sec)}",
-        "-to",
-        f"{float(end_sec)}",
+        "0",
+        "-t",
+        f"{duration}",
         *list(encode_args),
         str(output_path),
     ]
-    return _run_ffmpeg(cmd, "re-encode", timeout)
+    return _run_ffmpeg(
+        cmd, "re-encode", max(float(timeout), duration * REENCODE_SEC_PER_SEC)
+    )
 
 
 def concat_demuxer(
@@ -227,6 +251,10 @@ def concat_demuxer(
 
     Writes the ``file '<path>'`` manifest to ``list_file`` first, single-quote-
     escaped, and passes ``-safe 0`` so absolute paths are accepted.
+
+    ``timeout`` is a floor, raised to the time to move the pieces' bytes (see
+    :func:`keycut.io_timeout`) — twice over with ``faststart``, which rewrites
+    the whole output a second time to move the moov atom.
     """
     list_file = Path(list_file)
     output_path = Path(output_path)
@@ -242,7 +270,15 @@ def concat_demuxer(
     if faststart:
         cmd += ["-movflags", "+faststart"]
     cmd.append(str(output_path))
-    return _run_ffmpeg(cmd, "concat", timeout)
+    nbytes = sum(_size(p) for p in parts) * (2 if faststart else 1)
+    return _run_ffmpeg(cmd, "concat", io_timeout(timeout, nbytes))
+
+
+def _size(path: Path | str) -> int:
+    try:
+        return Path(path).stat().st_size
+    except OSError:
+        return 0
 
 
 def _run_ffmpeg(cmd: list[str], what: str, timeout: float) -> bool:
